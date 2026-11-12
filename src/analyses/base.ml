@@ -500,12 +500,77 @@ struct
     | _, Bot -> Bot
     | _ -> VD.top ()
 
+  (** Ring sentinels as in APR_RING ([apr_ring.h]):
+      [(T * )((char * )&x.p.g - offsetof(T, l))] is a fake [T] whose field [l] overlays the
+      struct containing [g] (the ring head). Pointer arithmetic keeps it as offset [p.g[k]]
+      (see [addToOffset] in [evalbinop_base]). When such an address is dereferenced with a
+      field offset [o] of [T], the accessed byte is [offsetof(g) + k + offsetof(o)] inside the
+      struct reached by [p]; if a field of the same type starts exactly there, return that real
+      address, otherwise [None]. Like [addToOffset], [k] is assumed to count bytes. *)
+  let overlay_offset ((x, base): Addr.Mval.t) (o: Offs.t): Addr.Mval.t option =
+    let rec split_last: Offs.t -> ((Offs.t -> Offs.t) * fieldinfo * IdxDom.t) option = function
+      | `Field (g, `Index (k, `NoOffset)) -> Some ((fun o -> o), g, k)
+      | `Field (f, o) -> Option.map (fun (p, g, k) -> ((fun o' -> `Field (f, p o')), g, k)) (split_last o)
+      | `Index (i, o) -> Option.map (fun (p, g, k) -> ((fun o' -> `Index (i, p o')), g, k)) (split_last o)
+      | `NoOffset -> None
+    in
+    (* byte offset and type of a field-only offset within type [t] *)
+    let rec fields_bytes t: Offs.t -> (int * typ) option = function
+      | `NoOffset -> Some (0, t)
+      | `Field (f, o) -> Option.map (fun (b, t') -> (Cilfacade.fieldBytesOffsetOnly f + b, t')) (fields_bytes f.ftype o)
+      | `Index _ -> None
+    in
+    let sig_of t = Cil.typeSigWithAttrs (fun _ -> []) (Cil.unrollTypeDeep t) in
+    (* field path inside [t] that starts at byte [b] and has type [target] *)
+    let rec find t b target: Offs.t option =
+      if b = 0 && sig_of t = sig_of target then Some `NoOffset
+      else match Cil.unrollType t with
+        | TComp (ci, _) ->
+          Stdlib.List.find_map (fun f ->
+              let off = Cilfacade.fieldBytesOffsetOnly f in
+              let size = Cilfacade.bytesSizeOf f.ftype in
+              if off <= b && b < off + size then
+                Option.map (fun o -> (`Field (f, o): Offs.t)) (find f.ftype (b - off) target)
+              else None
+            ) ci.cfields
+        | _ -> None
+    in
+    match o with
+    | `NoOffset | `Index _ -> None
+    | `Field (f, _) ->
+      try
+        match fields_bytes (TComp (f.fcomp, [])) o with
+        | None -> None
+        | Some (o_bytes, target) ->
+          (* [prefix] rebuilds the path down to the struct [s] in which byte [b] is resolved *)
+          let resolve s b prefix = Option.map (fun o' -> (x, prefix o')) (find s b target) in
+          match split_last base with
+          | Some (prefix, g, k) ->
+            (* sentinel [&head.g - k] with the link not at offset 0 *)
+            begin match IdxDom.to_int k with
+              | Some k -> resolve (TComp (g.fcomp, [])) (Cilfacade.fieldBytesOffsetOnly g + Z.to_int k + o_bytes) prefix
+              | None -> None
+            end
+          | None ->
+            (* link at offset 0: [&head.next - 0] already cancelled to [&head], so the address has
+               the head's struct type but [o] is a field of the element struct *)
+            begin match Cil.unrollType (Offs.type_of ~base:x.vtype base) with
+              | TComp (ci, _) when not (CilType.Compinfo.equal ci f.fcomp) ->
+                resolve (TComp (ci, [])) o_bytes (fun o' -> Offs.add_offset base o')
+              | _ -> None
+            end
+      with SizeOfError _ | Z.Overflow | Assert_failure _ | Offset.Type_of_error _ -> None
+
   (* TODO: Use AddressDomain for queries *)
   (* We need the previous function with the varinfo carried along, so we can
    * map it on the address sets. *)
   let add_offset_varinfo (o: Offs.t) (x: Addr.t): AD.t =
     match x with
-    | Addr m -> AD.of_mval (Addr.Mval.add_offset m o)
+    | Addr m ->
+      begin match overlay_offset m o with
+        | Some m' -> AD.of_mval m'
+        | None -> AD.of_mval (Addr.Mval.add_offset m o)
+      end
     | NullPtr -> AD.of_int (Offs.to_index o)
     | UnknownPtr
     | StrPtr _ -> AD.singleton x (* TODO: what is right for StrPtr? *)
@@ -1060,6 +1125,15 @@ struct
       in
       (** Lookup value at base address [addr] with given offset [ofs]. *)
       let lookup_with_offs addr =
+        let overlay = match addr with
+          | Addr.Addr m -> overlay_offset m (convert_offset ~man st ofs)
+          | _ -> None
+        in
+        match overlay with
+        | Some m' ->
+          (* field of a ring sentinel: read the ring head field it overlays *)
+          get_addr ~man ~top:(VD.top_value (Cilfacade.typeOfLval lv)) st (Addr.Addr m') (Some exp)
+        | None ->
         let v = (* abstract base value *)
           if cast_ok addr then
             get_addr ~man ~top:(VD.top_value t) st addr (Some exp)  (* downcasts are safe *)
