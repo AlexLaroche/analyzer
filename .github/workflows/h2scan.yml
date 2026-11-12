@@ -40,13 +40,18 @@ jobs:
         run: |
           set +e
           free -h; nproc
+          # Cap Goblint at 13 GiB so it fails on its own instead of starving the runner
+          # (run 43280606465 lost both runners this way, with no output).
+          ulimit -v $((13 * 1024 * 1024))
           /usr/bin/time -v timeout 20400 ./goblint \
             --set lib.activated[+] apr --set ana.activated[+] threadJoins \
             --set ana.malloc.unique_address_count 1 \
             --disable sem.unknown_function.spawn --disable sem.unknown_function.call \
             --disable sem.unknown_function.invalidate.globals --disable sem.unknown_function.invalidate.args \
             --disable sem.unknown_function.read.args \
-            --set dbg.timing.enabled true \
+            --set ana.activated[-] expRelation \
+            --disable ana.base.context.non-ptr --disable ana.base.context.int \
+            --set dbg.timing.enabled true --set dbg.solver-stats-interval 600 \
             h2scan/i${{ matrix.version }}/*.i > out${{ matrix.version }}.txt 2> time${{ matrix.version }}.txt
           echo "goblint exit=$?"
           tail -40 time${{ matrix.version }}.txt
