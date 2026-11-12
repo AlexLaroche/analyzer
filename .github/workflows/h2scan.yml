@@ -1,0 +1,64 @@
+name: h2scan
+
+# Whole-module Goblint race analysis of Apache httpd mod_http2 (2.4.70 vs 2.4.71)
+# with this fork's apr library group. Positive control: 2.4.70 must report a race
+# at h2_request.i:8158 (CVE-2026-119618, apr_table_setn on req->headers).
+
+on:
+  push:
+    branches: [h2scan-ci]
+  workflow_dispatch:
+
+jobs:
+  scan:
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ['70', '71']
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up OCaml
+        env:
+          OPAMLOCKED: locked
+        uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: ocaml-variants.4.14.2+options,ocaml-option-flambda
+
+      - name: Install dependencies
+        run: opam install . --deps-only --locked
+
+      - name: Build
+        run: ./make.sh nat
+
+      - name: Unpack inputs
+        run: tar xJf h2scan/h2scan-inputs.tar.xz -C h2scan
+
+      - name: Analyse httpd-2.4.${{ matrix.version }} mod_http2
+        run: |
+          set +e
+          free -h; nproc
+          /usr/bin/time -v timeout 20400 ./goblint \
+            --set lib.activated[+] apr --set ana.activated[+] threadJoins \
+            --set ana.malloc.unique_address_count 1 \
+            --disable sem.unknown_function.spawn --disable sem.unknown_function.call \
+            --disable sem.unknown_function.invalidate.globals --disable sem.unknown_function.invalidate.args \
+            --disable sem.unknown_function.read.args \
+            --set dbg.timing.enabled true \
+            h2scan/i${{ matrix.version }}/*.i > out${{ matrix.version }}.txt 2> time${{ matrix.version }}.txt
+          echo "goblint exit=$?"
+          tail -40 time${{ matrix.version }}.txt
+          echo "--- race summary ---"
+          grep -E 'race|Race' out${{ matrix.version }}.txt | head -100
+          echo "--- CVE-2026-119618 line (h2_request.i:8158) ---"
+          grep -n 'h2_request.i:815' out${{ matrix.version }}.txt || echo "not reported"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: h2scan-${{ matrix.version }}
+          path: |
+            out${{ matrix.version }}.txt
+            time${{ matrix.version }}.txt
