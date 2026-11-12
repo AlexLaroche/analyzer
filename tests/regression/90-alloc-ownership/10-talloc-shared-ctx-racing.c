@@ -1,4 +1,4 @@
-// PARAM: --set lib.activated[+] talloc
+// PARAM: --set lib.activated[+] talloc --set ana.activated[+] threadJoins
 // talloc is not thread-safe: allocating children of the same parent context
 // from two threads races on the parent's child list.
 #include <pthread.h>

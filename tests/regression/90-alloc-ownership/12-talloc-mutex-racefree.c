@@ -1,4 +1,4 @@
-// PARAM: --set lib.activated[+] talloc
+// PARAM: --set lib.activated[+] talloc --set ana.activated[+] threadJoins
 // A shared talloc context is fine under a common mutex.
 #include <pthread.h>
 #include "talloc_min.h"

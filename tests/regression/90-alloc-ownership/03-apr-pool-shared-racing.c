@@ -1,4 +1,4 @@
-// PARAM: --set lib.activated[+] apr
+// PARAM: --set lib.activated[+] apr --set ana.activated[+] threadJoins
 // APR pools are not thread-safe: two threads allocating from the same pool
 // race on the pool's internal free-list, even though each gets new memory.
 #include "apr_min.h"

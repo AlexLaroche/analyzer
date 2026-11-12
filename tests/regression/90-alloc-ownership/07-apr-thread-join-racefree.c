@@ -1,4 +1,4 @@
-// PARAM: --set lib.activated[+] apr
+// PARAM: --set lib.activated[+] apr --set ana.activated[+] threadJoins
 // After apr_thread_join the main thread is again the only user.
 #include "apr_min.h"
 

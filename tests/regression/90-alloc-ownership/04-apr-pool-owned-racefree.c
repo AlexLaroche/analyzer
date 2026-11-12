@@ -1,4 +1,4 @@
-// PARAM: --set lib.activated[+] apr
+// PARAM: --set lib.activated[+] apr --set ana.activated[+] threadJoins
 // Each pool has a single user at a time: the worker allocates from the pool
 // it was handed (and from one it creates itself), the main thread only from
 // its own pool. Separate pools must not be confused with each other.

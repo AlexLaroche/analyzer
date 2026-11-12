@@ -2766,6 +2766,8 @@ struct
       (* Like Malloc, but the new block is stored to *ptr (e.g. apr_pool_create(&pool, parent)). *)
       let lv = Cil.mkMem ~addr:ptr ~off:NoOffset in
       let (heap_var, addr) = alloc Queries.AllocationLocation.Heap size in
+      (* Such functions report failure by their return value, so *ptr never becomes NULL, also when the size is unknown. *)
+      let addr = Option.default addr heap_var in
       let blob_set = Option.map_default (fun heap_var -> [(heap_var, TVoid [], VD.Blob (VD.bot (), SizeDomain.lift (eval_int ~man st size), ZeroInit.malloc))]) [] heap_var in
       set_many ~man st ((eval_lv ~man st lv, (Cilfacade.typeOfLval lv), VD.Address addr) :: blob_set)
     | Calloc { count = n; size }, _ ->

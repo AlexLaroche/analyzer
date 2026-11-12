@@ -1,4 +1,4 @@
-// PARAM: --set lib.activated[+] apr
+// PARAM: --set lib.activated[+] apr --set ana.activated[+] threadJoins
 // Reduced from CVE-2020-11993 (httpd 2.4.20-2.4.43 mod_http2): with trace
 // logging on, a worker logged a stream event on the MAIN connection, which
 // formats the message in that connection's pool, while the main connection

@@ -1,4 +1,4 @@
-// PARAM: --set lib.activated[+] apr
+// PARAM: --set lib.activated[+] apr --set ana.activated[+] threadJoins
 // Reduced from the CVE-2020-11993 fix (httpd 2.4.44 mod_http2): the worker
 // logs on its own secondary connection, so only the worker uses that pool.
 #include "apr_min.h"

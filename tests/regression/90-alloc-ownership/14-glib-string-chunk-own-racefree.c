@@ -1,4 +1,4 @@
-// PARAM: --set lib.activated[+] glib
+// PARAM: --set lib.activated[+] glib --set ana.activated[+] threadJoins
 // Each thread inserts into its own GStringChunk.
 #include "glib_min.h"
 

@@ -1,4 +1,4 @@
-// PARAM: --set lib.activated[+] glib
+// PARAM: --set lib.activated[+] glib --set ana.activated[+] threadJoins
 // GStringChunk is not thread-safe: inserting into the same chunk from two
 // threads races on its internal storage.
 #include "glib_min.h"

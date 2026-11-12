@@ -1,4 +1,4 @@
-// PARAM: --set lib.activated[+] apr
+// PARAM: --set lib.activated[+] apr --set ana.activated[+] threadJoins
 // Reduced from httpd 2.4.70 mod_http2 h2_request.c assign_headers()
 // (CVE-2026-119618): a worker thread adds "Content-Length: 0" to the
 // stream's shared request headers instead of to its own request_rec copy,

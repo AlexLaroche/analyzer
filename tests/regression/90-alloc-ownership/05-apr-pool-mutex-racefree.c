@@ -1,4 +1,4 @@
-// PARAM: --set lib.activated[+] apr
+// PARAM: --set lib.activated[+] apr --set ana.activated[+] threadJoins --set ana.malloc.unique_address_count 1
 // A shared pool is fine when every allocation holds the same APR mutex.
 #include "apr_min.h"
 

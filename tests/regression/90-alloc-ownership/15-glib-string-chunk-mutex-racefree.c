@@ -1,4 +1,4 @@
-// PARAM: --set lib.activated[+] glib
+// PARAM: --set lib.activated[+] glib --set ana.activated[+] threadJoins
 // A shared GStringChunk is fine under a common GMutex.
 #include "glib_min.h"
 

@@ -1,4 +1,4 @@
-// PARAM: --set lib.activated[+] apr
+// PARAM: --set lib.activated[+] apr --set ana.activated[+] threadJoins
 // apr_thread_create passes `data` as the SECOND argument of the start
 // function (the first is the apr_thread_t handle).
 #include "apr_min.h"
