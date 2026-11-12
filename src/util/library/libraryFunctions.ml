@@ -501,7 +501,7 @@ let posix_descs_list: (string * LibraryDesc.t) list = LibraryDsl.[
 
 (** Pthread functions. *)
 let pthread_descs_list: (string * LibraryDesc.t) list = LibraryDsl.[
-    ("pthread_create", special [__ "thread" [w]; drop "attr" [r]; __ "start_routine" [s]; __ "arg" []] @@ fun thread start_routine arg -> ThreadCreate { thread; start_routine; arg; multiple = false }); (* For precision purposes arg is not considered accessed here. Instead all accesses (if any) come from actually analyzing start_routine. *)
+    ("pthread_create", special [__ "thread" [w]; drop "attr" [r]; __ "start_routine" [s]; __ "arg" []] @@ fun thread start_routine arg -> ThreadCreate { thread; start_routine; arg; arg_pos = 0; multiple = false }); (* For precision purposes arg is not considered accessed here. Instead all accesses (if any) come from actually analyzing start_routine. *)
     ("pthread_exit", special [__ "retval" []] @@ fun retval -> ThreadExit { ret_val = retval }); (* Doesn't dereference the void* itself, but just passes to pthread_join. *)
     ("pthread_join", special [__ "thread" []; __ "retval" [w]] @@ fun thread retval -> ThreadJoin {thread; ret_var = retval});
     ("pthread_once", special [__ "once_control" []; __ "init_routine" []] @@ fun once_control init_routine -> Once {once_control; init_routine});
@@ -1178,7 +1178,7 @@ let rtnl_lock = AddrOf (Cil.var (Cilfacade.create_var (makeGlobalVar "[rtnl_lock
 
 (** LDV Klever functions. *)
 let klever_descs_list: (string * LibraryDesc.t) list = LibraryDsl.[
-    ("pthread_create_N", special [__ "thread" [w]; drop "attr" [r]; __ "start_routine" [s]; __ "arg" []] @@ fun thread start_routine arg -> ThreadCreate { thread; start_routine; arg; multiple = true });
+    ("pthread_create_N", special [__ "thread" [w]; drop "attr" [r]; __ "start_routine" [s]; __ "arg" []] @@ fun thread start_routine arg -> ThreadCreate { thread; start_routine; arg; arg_pos = 0; multiple = true });
     ("pthread_join_N", special [__ "thread" []; __ "retval" [w]] @@ fun thread retval -> ThreadJoin {thread; ret_var = retval});
     ("ldv_mutex_model_lock", special [__ "lock" []; drop "sign" []] @@ fun lock -> Lock { lock; try_ = get_bool "sem.lock.fail"; write = true; return_on_success = true });
     ("ldv_mutex_model_unlock", special [__ "lock" []; drop "sign" []] @@ fun lock -> Unlock lock);
@@ -1299,6 +1299,93 @@ let legacy_libs_misc_list: (string * LibraryDesc.t) list = LibraryDsl.[
   ]
 [@@coverage off]
 
+(** Apache Portable Runtime (APR) functions.
+    APR pools are not thread-safe: allocating from a pool, or creating a subpool
+    in it, clearing or destroying it, writes the pool. Two threads using one
+    pool without synchronization therefore race on the pool, even though each
+    allocation returns new memory. *)
+let apr_descs_list: (string * LibraryDesc.t) list = LibraryDsl.[
+    (* apr_pools.h *)
+    ("apr_pool_create_ex", special [__ "newpool" [w]; drop "parent" [r; w]; drop "abort_fn" []; drop "allocator" []] @@ fun newpool -> MallocOut { ptr = newpool; size = MyCFG.unknown_exp });
+    ("apr_pool_create_unmanaged_ex", special [__ "newpool" [w]; drop "abort_fn" []; drop "allocator" []] @@ fun newpool -> MallocOut { ptr = newpool; size = MyCFG.unknown_exp });
+    ("apr_pool_clear", unknown [drop "p" [r; w]]);
+    ("apr_pool_destroy", unknown [drop "p" [r; w]]);
+    ("apr_palloc", special [drop "p" [r; w]; __ "size" []] @@ fun size -> Malloc size);
+    ("apr_pcalloc", special [drop "p" [r; w]; __ "size" []] @@ fun size -> Calloc { count = Cil.one; size }); (* only a function with APR_POOL_DEBUG, otherwise a macro for memset(apr_palloc(p, size), 0, size) *)
+    (* apr_strings.h: results are allocated from the pool *)
+    ("apr_pstrdup", special [drop "p" [r; w]; drop "s" [r]] @@ Malloc MyCFG.unknown_exp);
+    ("apr_pstrndup", special [drop "p" [r; w]; drop "s" [r]; drop "n" []] @@ Malloc MyCFG.unknown_exp);
+    ("apr_pstrmemdup", special [drop "p" [r; w]; drop "s" [r]; drop "n" []] @@ Malloc MyCFG.unknown_exp);
+    ("apr_pmemdup", special [drop "p" [r; w]; drop "m" [r]; __ "n" []] @@ fun n -> Malloc n);
+    ("apr_pstrcat", special (drop "p" [r; w] :: VarArgs (drop' [r])) @@ Malloc MyCFG.unknown_exp);
+    ("apr_psprintf", special (drop "p" [r; w] :: drop "fmt" [r] :: VarArgs (drop' [r])) @@ Malloc MyCFG.unknown_exp);
+    ("apr_pvsprintf", special [drop "p" [r; w]; drop "fmt" [r]; drop "ap" [r_deep]] @@ Malloc MyCFG.unknown_exp);
+    (* apr_tables.h: tables are allocated from a pool and are not thread-safe either *)
+    ("apr_table_make", special [drop "p" [r; w]; drop "nelts" []] @@ Malloc MyCFG.unknown_exp);
+    ("apr_table_clone", special [drop "p" [r; w]; drop "t" [r]] @@ Malloc MyCFG.unknown_exp);
+    ("apr_table_copy", special [drop "p" [r; w]; drop "t" [r]] @@ Malloc MyCFG.unknown_exp);
+    ("apr_table_get", unknown [drop "t" [r]; drop "key" [r]]);
+    ("apr_table_getm", unknown [drop "p" [r; w]; drop "t" [r]; drop "key" [r]]);
+    ("apr_table_set", unknown [drop "t" [r; w]; drop "key" [r]; drop "val" [r]]);
+    ("apr_table_setn", unknown [drop "t" [r; w]; drop "key" [r]; drop "val" [r]]);
+    ("apr_table_add", unknown [drop "t" [r; w]; drop "key" [r]; drop "val" [r]]);
+    ("apr_table_addn", unknown [drop "t" [r; w]; drop "key" [r]; drop "val" [r]]);
+    ("apr_table_merge", unknown [drop "t" [r; w]; drop "key" [r]; drop "val" [r]]);
+    ("apr_table_mergen", unknown [drop "t" [r; w]; drop "key" [r]; drop "val" [r]]);
+    ("apr_table_unset", unknown [drop "t" [r; w]; drop "key" [r]]);
+    ("apr_table_clear", unknown [drop "t" [r; w]]);
+    (* apr_thread_proc.h: the start function gets (apr_thread_t *thd, void *data) *)
+    ("apr_thread_create", special [__ "new_thread" [w]; drop "attr" [r]; __ "func" [s]; __ "data" []; drop "cont" [r; w]] @@ fun thread start_routine arg -> ThreadCreate { thread; start_routine; arg; arg_pos = 1; multiple = false });
+    ("apr_thread_join", special [drop "retval" [w]; __ "thd" []] @@ fun thd -> ThreadJoin { thread = thd; ret_var = Cil.zero }); (* retval is the apr_thread_exit status, not the start function's result *)
+    ("apr_thread_exit", special [drop "thd" []; drop "retval" []] @@ ThreadExit { ret_val = MyCFG.unknown_exp });
+    (* apr_thread_mutex.h, apr_thread_cond.h *)
+    ("apr_thread_mutex_create", special [__ "mutex" [w]; drop "flags" []; drop "pool" [r; w]] @@ fun mutex -> MallocOut { ptr = mutex; size = MyCFG.unknown_exp });
+    ("apr_thread_mutex_lock", special [__ "mutex" []] @@ fun mutex -> Lock { lock = mutex; try_ = get_bool "sem.lock.fail"; write = true; return_on_success = false });
+    ("apr_thread_mutex_trylock", special [__ "mutex" []] @@ fun mutex -> Lock { lock = mutex; try_ = true; write = true; return_on_success = false });
+    ("apr_thread_mutex_unlock", special [__ "mutex" []] @@ fun mutex -> Unlock mutex);
+    ("apr_thread_mutex_destroy", unknown [drop "mutex" [f]]);
+    ("apr_thread_cond_create", special [__ "cond" [w]; drop "pool" [r; w]] @@ fun cond -> MallocOut { ptr = cond; size = MyCFG.unknown_exp });
+    ("apr_thread_cond_wait", special [__ "cond" []; __ "mutex" []] @@ fun cond mutex -> Wait { cond; mutex });
+    ("apr_thread_cond_timedwait", special [__ "cond" []; __ "mutex" []; drop "timeout" []] @@ fun cond mutex -> TimedWait { cond; mutex; abstime = MyCFG.unknown_exp });
+    ("apr_thread_cond_signal", special [__ "cond" []] @@ fun cond -> Signal cond);
+    ("apr_thread_cond_broadcast", special [__ "cond" []] @@ fun cond -> Broadcast cond);
+    ("apr_thread_cond_destroy", unknown [drop "cond" [f]]);
+  ]
+
+(** talloc functions.
+    A talloc context is not thread-safe: allocating under a parent context
+    links the new chunk into the parent, i.e. writes the parent. *)
+let talloc_descs_list: (string * LibraryDesc.t) list = LibraryDsl.[
+    ("talloc_named_const", special [drop "context" [r; w]; __ "size" []; drop "name" [r]] @@ fun size -> Malloc size); (* talloc(), talloc_new(), talloc_size() *)
+    ("_talloc_zero", special [drop "ctx" [r; w]; __ "size" []; drop "name" [r]] @@ fun size -> Calloc { count = Cil.one; size });
+    ("_talloc_memdup", special [drop "t" [r; w]; drop "p" [r]; __ "size" []; drop "name" [r]] @@ fun size -> Malloc size);
+    ("_talloc_array", special [drop "ctx" [r; w]; drop "el_size" []; drop "count" []; drop "name" [r]] @@ Malloc MyCFG.unknown_exp);
+    ("talloc_strdup", special [drop "t" [r; w]; drop "p" [r]] @@ Malloc MyCFG.unknown_exp);
+    ("talloc_strndup", special [drop "t" [r; w]; drop "p" [r]; drop "n" []] @@ Malloc MyCFG.unknown_exp);
+    ("talloc_asprintf", special (drop "t" [r; w] :: drop "fmt" [r] :: VarArgs (drop' [r])) @@ Malloc MyCFG.unknown_exp);
+    ("_talloc_steal_loc", special [drop "new_ctx" [r; w]; __ "ptr" [r; w]; drop "location" [r]] @@ fun ptr -> Identity ptr);
+    ("_talloc_free", special [__ "ptr" [f]; drop "location" [r]] @@ fun ptr -> Free ptr); (* talloc_free() *)
+  ]
+
+(** GLib functions. *)
+let glib_descs_list: (string * LibraryDesc.t) list = LibraryDsl.[
+    (* GStringChunk is not thread-safe: inserting writes the chunk. *)
+    ("g_string_chunk_new", special [drop "size" []] @@ Malloc MyCFG.unknown_exp);
+    ("g_string_chunk_free", special [__ "chunk" [f]] @@ fun chunk -> Free chunk);
+    ("g_string_chunk_clear", unknown [drop "chunk" [r; w]]);
+    ("g_string_chunk_insert", special [drop "chunk" [r; w]; drop "string" [r]] @@ Malloc MyCFG.unknown_exp);
+    ("g_string_chunk_insert_len", special [drop "chunk" [r; w]; drop "string" [r]; drop "len" []] @@ Malloc MyCFG.unknown_exp);
+    ("g_string_chunk_insert_const", special [drop "chunk" [r; w]; drop "string" [r]] @@ Malloc MyCFG.unknown_exp);
+    (* gthread.h *)
+    ("g_thread_new", special [drop "name" [r]; __ "func" [s]; __ "data" []] @@ fun start_routine arg -> ThreadCreate { thread = Cil.zero; start_routine; arg; arg_pos = 0; multiple = false }); (* the handle is the return value *)
+    ("g_thread_join", special [__ "thread" []] @@ fun thread -> ThreadJoin { thread; ret_var = Cil.zero });
+    ("g_mutex_init", special [__ "mutex" []] @@ fun mutex -> MutexInit { mutex; attr = Cil.zero });
+    ("g_mutex_clear", unknown [drop "mutex" [f]]);
+    ("g_mutex_lock", special [__ "mutex" []] @@ fun mutex -> Lock { lock = mutex; try_ = get_bool "sem.lock.fail"; write = true; return_on_success = false });
+    ("g_mutex_trylock", special [__ "mutex" []] @@ fun mutex -> Lock { lock = mutex; try_ = true; write = true; return_on_success = true }); (* returns TRUE on success *)
+    ("g_mutex_unlock", special [__ "mutex" []] @@ fun mutex -> Unlock mutex);
+  ]
+
 let libraries = Hashtbl.of_list [
     ("c", c_descs_list @ math_descs_list);
     ("posix", posix_descs_list);
@@ -1315,6 +1402,9 @@ let libraries = Hashtbl.of_list [
     ("pcre", pcre_descs_list);
     ("zlib", zlib_descs_list);
     ("liblzma", liblzma_descs_list);
+    ("apr", apr_descs_list);
+    ("talloc", talloc_descs_list);
+    ("glib", glib_descs_list);
     ("legacy", legacy_libs_misc_list);
   ]
 

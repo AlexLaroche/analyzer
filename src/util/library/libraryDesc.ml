@@ -50,13 +50,16 @@ type math =
 type special =
   | Alloca of Cil.exp
   | Malloc of Cil.exp
+  | MallocOut of { ptr: Cil.exp; size: Cil.exp; } (** Allocates like {!Malloc}, but stores the new pointer to [*ptr] instead of returning it, e.g. [apr_pool_create(&pool, parent)]. *)
   | Calloc of { count: Cil.exp; size: Cil.exp; }
   | Realloc of { ptr: Cil.exp; size: Cil.exp; }
   | Free of Cil.exp
   | Assert of { exp: Cil.exp; check: bool; refine: bool; }
   | Lock of { lock: Cil.exp; try_: bool; write: bool; return_on_success: bool; }
   | Unlock of Cil.exp
-  | ThreadCreate of { thread: Cil.exp; start_routine: Cil.exp; arg: Cil.exp; multiple: bool }
+  | ThreadCreate of { thread: Cil.exp; start_routine: Cil.exp; arg: Cil.exp; arg_pos: int; multiple: bool }
+  (** [thread] points to where the thread handle is stored, or is a null pointer constant if the handle is the return value (e.g. [g_thread_new]).
+      [arg] is passed as the [arg_pos]-th (0-based) argument of [start_routine]; any other arguments are unknown. *)
   | ThreadJoin of { thread: Cil.exp; ret_var: Cil.exp; }
   | ThreadExit of { ret_val: Cil.exp; }
   | ThreadSelf

@@ -2235,18 +2235,20 @@ struct
 
 
   let forkfun (man:(D.t, G.t, C.t, V.t) Analyses.man) (lv: lval option) (f: varinfo) (args: exp list) : (lval option * varinfo * exp list * bool) list =
-    let create_thread ~multiple lval arg v =
+    let create_thread ~multiple ?(arg_pos=0) lval arg v =
+      (* [arg] goes to the [arg_pos]-th parameter, earlier parameters are unknown (e.g. the apr_thread_t handle for APR threads). *)
+      let place_arg arg = List.init (arg_pos + 1) (fun i -> if i = arg_pos then arg else MyCFG.unknown_exp) in
       try
         (* try to get function declaration *)
         let fd = Cilfacade.find_varinfo_fundec v in
-        let args = Option.map_default_delayed (List.singleton) (fun () -> List.map (fun x -> MyCFG.unknown_exp) fd.sformals) arg in
+        let args = Option.map_default_delayed place_arg (fun () -> List.map (fun x -> MyCFG.unknown_exp) fd.sformals) arg in
         Some (lval, v, args, multiple)
       with Not_found ->
         if LF.use_special f.vname then None (* we handle this function *)
         else if isFunctionType v.vtype then
           (* FromSpec warns about unknown thread creation, so we don't do it here any more *)
           let (_, v_args, _, _) = Cil.splitFunctionTypeVI v in
-          let args = Option.map_default_delayed (List.singleton) (fun () -> List.map (fun x -> MyCFG.unknown_exp) (Cil.argsToList v_args)) arg in
+          let args = Option.map_default_delayed place_arg (fun () -> List.map (fun x -> MyCFG.unknown_exp) (Cil.argsToList v_args)) arg in
           Some (lval, v, args, multiple)
         else (
           M.debug ~category:Analyzer "Not creating a thread from %s because its type is %a" v.vname d_type v.vtype;
@@ -2256,7 +2258,7 @@ struct
     let desc = LF.find f in
     match desc.special args, f.vname with
     (* handling thread creations *)
-    | ThreadCreate { thread = id; start_routine = start; arg = ptc_arg; multiple }, _ -> begin
+    | ThreadCreate { thread = id; start_routine = start; arg = ptc_arg; arg_pos; multiple }, _ -> begin
         (* extra sync so that we do not analyze new threads with bottom global invariant *)
         publish_all man `Thread;
         (* Collect the threads. *)
@@ -2268,7 +2270,9 @@ struct
           else
             start_funvars
         in
-        List.filter_map (create_thread ~multiple (Some (Mem id, NoOffset)) (Some ptc_arg)) start_funvars_with_unknown
+        (* A null pointer constant as [thread] means the handle is returned (e.g. g_thread_new). *)
+        let thread_lval = if Cil.isZero id then lv else Some (Mem id, NoOffset) in
+        List.filter_map (create_thread ~multiple ~arg_pos thread_lval (Some ptc_arg)) start_funvars_with_unknown
       end
     | _, _ ->
       let shallow_args = LibraryDesc.Accesses.find desc.accs ~kind:Spawn ~deep:false args in
@@ -2758,6 +2762,12 @@ struct
           set_many ~man st ((eval_lv ~man st lv, (Cilfacade.typeOfLval lv), VD.Address addr) :: blob_set)
         | _ -> st
       end
+    | MallocOut { ptr; size }, _ ->
+      (* Like Malloc, but the new block is stored to *ptr (e.g. apr_pool_create(&pool, parent)). *)
+      let lv = Cil.mkMem ~addr:ptr ~off:NoOffset in
+      let (heap_var, addr) = alloc Queries.AllocationLocation.Heap size in
+      let blob_set = Option.map_default (fun heap_var -> [(heap_var, TVoid [], VD.Blob (VD.bot (), SizeDomain.lift (eval_int ~man st size), ZeroInit.malloc))]) [] heap_var in
+      set_many ~man st ((eval_lv ~man st lv, (Cilfacade.typeOfLval lv), VD.Address addr) :: blob_set)
     | Calloc { count = n; size }, _ ->
       begin match lv with
         | Some lv -> (* array length is set to one, as num*size is done when turning into `Calloc *)

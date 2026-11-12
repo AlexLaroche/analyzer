@@ -1540,6 +1540,9 @@
               "pcre",
               "zlib",
               "liblzma",
+              "apr",
+              "talloc",
+              "glib",
               "legacy"
             ]
           },
