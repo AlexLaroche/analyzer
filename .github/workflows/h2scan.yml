@@ -52,6 +52,8 @@ jobs:
           tail -40 time${{ matrix.version }}.txt
           echo "--- race summary ---"
           grep -E 'race|Race' out${{ matrix.version }}.txt | head -100
+          echo "--- reachability of worker request path ---"
+          grep -E "Function '(assign_headers|h2_create_request_rec|h2_c2_process|c2_prod_next|s_next_c2)' is uncalled" out${{ matrix.version }}.txt || echo "all reached"
           echo "--- CVE-2026-119618 line (h2_request.i:8158) ---"
           grep -n 'h2_request.i:815' out${{ matrix.version }}.txt || echo "not reported"
 
