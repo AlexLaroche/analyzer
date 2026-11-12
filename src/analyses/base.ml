@@ -2387,6 +2387,12 @@ struct
         invalidate ~must:true ~deep:false ~man st [Cil.mkAddrOrStartOf lv]
         ) st lv
     in
+    (* memset and memcpy return their dest argument, e.g. APR's apr_pcalloc is the macro memset(apr_palloc(p, size), 0, size). *)
+    let set_ret_lv_to st exp =
+      Option.map_default (fun lv ->
+          set ~man st (eval_lv ~man st lv) (Cilfacade.typeOfLval lv) (eval_rv ~man st exp)
+        ) st lv
+    in
     let addr_type_of_exp exp =
       let lval = mkMem ~addr:(Cil.stripCasts exp) ~off:NoOffset in
       let addr = eval_lv ~man man.local lval in
@@ -2552,12 +2558,15 @@ struct
       let dest_a, dest_typ = addr_type_of_exp dest in
       let value =
         match eval_ch with
+        | Int i when ID.equal_to Z.zero i = `Eq && Cil.isVoidType dest_typ ->
+          (* Zeroing through void*, e.g. memset(malloc(n), 0, n): same zero blob as calloc, so that later typed accesses still work. *)
+          VD.Blob (VD.bot (), SizeDomain.lift (eval_int ~man st count), ZeroInit.calloc)
         | Int i when ID.equal_to Z.zero i = `Eq ->
           VD.zero_init_value dest_typ
         | _ ->
           VD.top_value dest_typ
       in
-      set ~man st dest_a dest_typ value
+      set_ret_lv_to (set ~man st dest_a dest_typ value) dest
     | Bzero { dest; count; }, _ ->
       (* TODO: share something with memset special case? *)
       (* TODO: check count *)
@@ -2565,7 +2574,7 @@ struct
       let value = VD.zero_init_value dest_typ in
       set ~man st dest_a dest_typ value
     | Memcpy { dest = dst; src; n; }, _ -> (* TODO: use n *)
-      memory_copying dst src (Some n)
+      set_ret_lv_to (memory_copying dst src (Some n)) dst
     | Strcpy { dest = dst; src; n }, _ -> string_manipulation dst src None false None (fun ar1 ar2 -> Array (CArrays.string_copy ar1 ar2 (eval_n n)))
     | Strcat { dest = dst; src; n }, _ -> string_manipulation dst src None false None (fun ar1 ar2 -> Array (CArrays.string_concat ar1 ar2 (eval_n n)))
     | Strlen s, _ ->
