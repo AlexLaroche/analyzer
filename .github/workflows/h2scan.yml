@@ -51,6 +51,7 @@ jobs:
             --disable sem.unknown_function.read.args \
             --set ana.activated[-] expRelation \
             --disable ana.base.context.non-ptr --disable ana.base.context.int \
+            --set ana.ctx_insens[+] base --enable ana.context.widen \
             --set dbg.timing.enabled true --set dbg.solver-stats-interval 600 \
             h2scan/i${{ matrix.version }}/*.i > out${{ matrix.version }}.txt 2> time${{ matrix.version }}.txt
           echo "goblint exit=$?"
