@@ -291,7 +291,8 @@ module Base =
       print_solver_stats := (fun () ->
           print_data data;
           Logs.info "|called|=%d" (HM.length called);
-          print_context_stats rho
+          print_context_stats rho;
+          print_growth_stats rho
         );
 
       if GobConfig.get_bool "incremental.load" then (

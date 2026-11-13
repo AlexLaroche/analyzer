@@ -31,6 +31,9 @@ module LoadRunSolver: GenericEqSolver =
 module LoadRunIncrSolver: DemandEqIncrSolver =
   PostSolver.DemandEqIncrSolverFromEqSolver (LoadRunSolver)
 
+(* h2scan diagnostic: shared by all SolverStats instances (TD3 counts evaluations in a different instance than the one that prints). *)
+let evals_by_fn: (string, int) Hashtbl.t = Hashtbl.create 1024
+
 module SolverStats (S:EqConstrSys) (HM:Hashtbl.S with type key = S.v) =
 struct
   open S
@@ -69,8 +72,14 @@ struct
   let get_var_event x =
     if tracing && full_trace then trace "sol" "Querying %a" Var.pretty_trace x
 
+  (* h2scan diagnostic: where do the solver's unknowns and re-evaluations go? *)
+  let fn_name (x: Var.t) =
+    let fd = Node.find_fundec (Var.node x) in
+    if fd == GoblintCil.dummyFunDec then None else Some fd.svar.vname
+
   let eval_rhs_event x =
     if tracing && full_trace then trace "sol" "(Re-)evaluating %a" Var.pretty_trace x;
+    (match fn_name x with Some f -> Hashtbl.modify_def 0 f ((+) 1) evals_by_fn | None -> ());
     incr SolverStats.evals;
     if (get_bool "dbg.solver-progress") then (incr stack_d; Logs.debug "%d" !stack_d)
 
@@ -100,6 +109,52 @@ struct
     |> List.sort (fun (_,n1) (_,n2) -> compare n2 n1)
     |> List.take topn
     |> List.iter @@ fun (k,n) -> Logs.debug "%d\tcontexts for %s" n k
+
+  (* h2scan diagnostic: top functions by unknowns (all nodes and contexts), top global
+     unknowns grouped by their printed key (truncated), top functions by evaluations
+     since the previous print. *)
+  let print_growth_stats rho =
+    let topn = 25 in
+    let top name h =
+      Logs.info "%s (%d groups):" name (Hashtbl.length h);
+      Hashtbl.to_list h
+      |> List.sort (fun (_,n1) (_,n2) -> compare n2 n1)
+      |> List.take topn
+      |> List.iter (fun (k,n) -> Logs.info "  %d\t%s" n k)
+    in
+    let by_fn = Hashtbl.create 1024 and by_glob = Hashtbl.create 1024 in
+    let ctxs = Hashtbl.create 1024 and samples = Hashtbl.create 1024 in
+    let nglob = ref 0 in
+    HM.iter (fun k _ ->
+        match fn_name k with
+        | Some f ->
+          Hashtbl.modify_def 0 f ((+) 1) by_fn;
+          (match S.Var.node k with
+           | FunctionEntry _ ->
+             Hashtbl.modify_def 0 f ((+) 1) ctxs;
+             if List.length (Hashtbl.find_all samples f) < 2 then Hashtbl.add samples f k
+           | _ -> ())
+        | None ->
+          incr nglob;
+          let str = try GobPretty.sprint S.Var.pretty_trace k with _ -> "<unprintable>" in
+          let str = if String.length str > 120 then String.sub str 0 120 else str in
+          Hashtbl.modify_def 0 str ((+) 1) by_glob
+      ) rho;
+    Logs.info "growth: %d unknowns, %d not in a function" (HM.length rho) !nglob;
+    top "growth: unknowns by function" by_fn;
+    top "growth: contexts by function" ctxs;
+    Hashtbl.to_list ctxs
+    |> List.sort (fun (_,n1) (_,n2) -> compare n2 n1)
+    |> List.take 3
+    |> List.iter (fun (f,_) ->
+        List.iter (fun k ->
+            let str = try GobPretty.sprint S.Var.pretty_trace k with _ -> "<unprintable>" in
+            let str = if String.length str > 1500 then String.sub str 0 1500 else str in
+            Logs.info "growth: sample context of %s: %s" f str
+          ) (Hashtbl.find_all samples f));
+    top "growth: non-function unknowns by key" by_glob;
+    top "growth: evaluations by function since last print" evals_by_fn;
+    Hashtbl.clear evals_by_fn
 
   let stats_csv =
     let save_run_str = GobConfig.get_string "save_run" in
