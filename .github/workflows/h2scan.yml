@@ -15,6 +15,7 @@ jobs:
       fail-fast: false
       matrix:
         version: ['70', '71']
+        target: ['whole', '1', '2', '3', '4', '5']
     runs-on: ubuntu-latest
     timeout-minutes: 355
     steps:
@@ -36,9 +37,16 @@ jobs:
       - name: Unpack inputs
         run: tar xJf h2scan/h2scan-inputs.tar.xz -C h2scan
 
-      - name: Analyse httpd-2.4.${{ matrix.version }} mod_http2
+      - name: Analyse httpd-2.4.${{ matrix.version }} mod_http2 (${{ matrix.target }})
         run: |
           set +e
+          v=${{ matrix.version }}; t=${{ matrix.target }}
+          if [ "$t" = whole ]; then
+            FILES="h2scan/i$v/*.i"
+          else
+            # hand-off scenario t: one-pass workers, loop-free beam model, scenario harness
+            FILES="$(ls h2scan/i$v/*.i | grep -v -e harness.i -e h2_bucket_beam.i -e h2_workers.i) h2scan/handoff/h$v/h2_workers_once.i h2scan/handoff/h$v/beam_model.i h2scan/handoff/h$v/handoff$t.i"
+          fi
           free -h; nproc
           # Cap Goblint at 13 GiB so it fails on its own instead of starving the runner
           # (run 43280606465 lost both runners this way, with no output).
@@ -51,22 +59,23 @@ jobs:
             --disable sem.unknown_function.read.args \
             --set ana.activated[-] expRelation \
             --disable ana.base.context.non-ptr --disable ana.base.context.int \
-            --set ana.ctx_insens[+] base --set ana.ctx_insens[+] mallocWrapper --enable ana.context.widen \
+            --set ana.ctx_insens[+] base --set ana.ctx_insens[+] mallocWrapper \
+            --disable ana.thread.context.create-edges \
             --set dbg.timing.enabled true --set dbg.solver-stats-interval 600 \
-            h2scan/i${{ matrix.version }}/*.i > out${{ matrix.version }}.txt 2> time${{ matrix.version }}.txt
+            $FILES > out.txt 2> time.txt
           echo "goblint exit=$?"
-          tail -40 time${{ matrix.version }}.txt
+          tail -40 time.txt
           echo "--- race summary ---"
-          grep -E 'race|Race' out${{ matrix.version }}.txt | head -100
+          grep -E 'race|Race' out.txt | head -100
           echo "--- reachability of worker request path ---"
-          grep -E "Function '(assign_headers|h2_create_request_rec|h2_c2_process|c2_prod_next|s_next_c2)' is uncalled" out${{ matrix.version }}.txt || echo "all reached"
+          grep -E "Function '(assign_headers|h2_create_request_rec|h2_c2_process|c2_prod_next|s_next_c2)' is uncalled" out.txt || echo "all reached"
           echo "--- CVE-2026-119618 line (h2_request.i:8158) ---"
-          grep -n 'h2_request.i:815' out${{ matrix.version }}.txt || echo "not reported"
+          grep -n 'h2_request.i:815' out.txt || echo "not reported"
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: h2scan-${{ matrix.version }}
+          name: h2scan-${{ matrix.version }}-${{ matrix.target }}
           path: |
-            out${{ matrix.version }}.txt
-            time${{ matrix.version }}.txt
+            out.txt
+            time.txt

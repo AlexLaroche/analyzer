@@ -33,6 +33,8 @@ module LoadRunIncrSolver: DemandEqIncrSolver =
 
 (* h2scan diagnostic: shared by all SolverStats instances (TD3 counts evaluations in a different instance than the one that prints). *)
 let evals_by_fn: (string, int) Hashtbl.t = Hashtbl.create 1024
+let side_changes: (string, int) Hashtbl.t = Hashtbl.create 1024
+let side_diffs: (string, string) Hashtbl.t = Hashtbl.create 64
 
 module SolverStats (S:EqConstrSys) (HM:Hashtbl.S with type key = S.v) =
 struct
@@ -113,6 +115,17 @@ struct
   (* h2scan diagnostic: top functions by unknowns (all nodes and contexts), top global
      unknowns grouped by their printed key (truncated), top functions by evaluations
      since the previous print. *)
+  let side_change_event (y: Var.t) old_d new_d =
+    let str = try GobPretty.sprint S.Var.pretty_trace y with _ -> "<unprintable>" in
+    let str = if String.length str > 200 then String.sub str 0 200 else str in
+    Hashtbl.modify_def 0 str ((+) 1) side_changes;
+    (* keep the diffs of the 3rd to 5th change of a key in this interval: early changes are normal growth *)
+    let n = Hashtbl.find side_changes str in
+    if n >= 3 && n <= 5 then (
+      let d = try GobPretty.sprint S.Dom.pretty_diff (new_d, old_d) with _ -> "<unprintable>" in
+      let d = if String.length d > 2500 then String.sub d 0 2500 else d in
+      Hashtbl.add side_diffs str d)
+
   let print_growth_stats rho =
     let topn = 25 in
     let top name h =
@@ -154,7 +167,15 @@ struct
           ) (Hashtbl.find_all samples f));
     top "growth: non-function unknowns by key" by_glob;
     top "growth: evaluations by function since last print" evals_by_fn;
-    Hashtbl.clear evals_by_fn
+    Hashtbl.clear evals_by_fn;
+    top "growth: changed global unknowns since last print" side_changes;
+    Hashtbl.to_list side_changes
+    |> List.sort (fun (_,n1) (_,n2) -> compare n2 n1)
+    |> List.take 3
+    |> List.iter (fun (k,_) ->
+        List.iter (fun d -> Logs.info "growth: change of %s: %s" k d) (Hashtbl.find_all side_diffs k));
+    Hashtbl.clear side_changes;
+    Hashtbl.clear side_diffs
 
   let stats_csv =
     let save_run_str = GobConfig.get_string "save_run" in
